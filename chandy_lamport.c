@@ -28,24 +28,24 @@ sem_t empty_output;
 /* tipo de dados para implementar relogio vetorial */
 typedef struct clock {
 	int p[3];
-} CLOCK;
+} cclock_t;
 
 /* tipo de dados para implementar uma mensagem */
 typedef struct {
-	CLOCK conteudo;
+	cclock_t conteudo;
 	int source;
 	int dest;
 	int marker;
-} MESSAGE;
+} message_t;
 
 /* tipo de dados para implementar as filas */
 typedef struct reg {
-	MESSAGE		conteudo;
+	message_t		conteudo;
 	struct reg	*prox;
 } CEL;
 
 /* o relógio vetorial do processo */
-CLOCK _clock = {{0,0,0}};
+cclock_t _clock = {{0,0,0}};
 
 /* variável global para indicar quantos relógios
  * precisam ser processados antes de um marcador 
@@ -69,25 +69,25 @@ int			my_rank;
 
 /* esse é o relógio vetorial
  * salvo como snapshot */
-CLOCK _clock_snapshot;
+cclock_t _clock_snapshot;
 
 /* variáveis para auxiliar
  * em redireções de código nas threads principal
  * e get_message */
-int SNAPSHOT_STARTED = 0;
-int WHO_STARTED_SNAPSHOT = -1;
-int MARKERS_SEEN = 0;
+int snapshot_started = 0;
+int who_started_snapshot = -1;
+int markers_seen = 0;
 
 /* Funções Fila */
-MESSAGE queue_remove(CEL *q);
-CEL *queue_insert(MESSAGE m, CEL *q);
+message_t queue_remove(CEL *q);
+CEL *queue_insert(message_t m, CEL *q);
 
 /* Funções Produtor/Consumidor */
-void produce_input(MESSAGE m);
-MESSAGE consume_input();
+void produce_input(message_t m);
+message_t consume_input();
 
-void produce_output(MESSAGE m);
-MESSAGE consume_output();
+void produce_output(message_t m);
+message_t consume_output();
 
 /* Funções que as threads utilizarão */
 void *get_message(void* args);
@@ -100,7 +100,7 @@ void *process2();
 
 /* função para processar o relógio vetorial
  * recebido via mensagem */
-void update_clock(CLOCK c2);
+void update_clock(cclock_t c2);
 
 /* função evento */
 void Event(int pid);
@@ -111,7 +111,7 @@ void snapshot(int from);
 
 /* tipo de dados para 
  * informar o layout de dados
- * do struct MESSAGE
+ * do struct message_t
  * para o MPI */
 MPI_Datatype mpi_message_type;
 
@@ -155,7 +155,7 @@ int main(int argc, char **argv){
 	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
 	/* criacao de tipo para mpi */
-	MESSAGE message_t_example;
+	message_t message_t_example;
 
 	int block_c[1] = {3};
 	MPI_Datatype type_c[1] = {MPI_INT};
@@ -291,16 +291,16 @@ int main(int argc, char **argv){
 	return 0;
 }
 
-MESSAGE queue_remove(CEL *q){
+message_t queue_remove(CEL *q){
 	CEL *p;
 	p = q->prox;
-	MESSAGE x = p->conteudo;
+	message_t x = p->conteudo;
 	q->prox = p->prox;
 	free(p);
 	return x;
 }
 
-CEL *queue_insert(MESSAGE m, CEL *q){
+CEL *queue_insert(message_t m, CEL *q){
 	CEL *new;
 	new = malloc(sizeof(CEL));
 	new->prox = q->prox;
@@ -309,7 +309,7 @@ CEL *queue_insert(MESSAGE m, CEL *q){
 	return new;
 }
 
-void produce_input(MESSAGE m){
+void produce_input(message_t m){
 	sem_wait(&empty);
 	sem_wait(&semaphore);
 	input_messages = queue_insert(m, input_messages);
@@ -317,16 +317,16 @@ void produce_input(MESSAGE m){
 	sem_post(&full);
 }
 
-MESSAGE consume_input(){
+message_t consume_input(){
 	sem_wait(&full);
 	sem_wait(&semaphore);
-	MESSAGE m = queue_remove(input_messages);
+	message_t m = queue_remove(input_messages);
 	sem_post(&semaphore);
 	sem_post(&empty);
 	return m;
 }
 
-void produce_output(MESSAGE m){
+void produce_output(message_t m){
 	sem_wait(&empty_output);
 	sem_wait(&semaphore_output);
 	output_messages = queue_insert(m, output_messages);
@@ -334,10 +334,10 @@ void produce_output(MESSAGE m){
 	sem_post(&full_output);
 }
 
-MESSAGE consume_output(){
+message_t consume_output(){
 	sem_wait(&full_output);
 	sem_wait(&semaphore_output);
-	MESSAGE m = queue_remove(output_messages);
+	message_t m = queue_remove(output_messages);
 	sem_post(&semaphore_output);
 	sem_post(&empty_output);
 	return m;
@@ -349,37 +349,37 @@ void *get_message(void* args){
 
 	while(n_listens--){
 		printf("Getting a message in process %d\n", my_rank);
-		MESSAGE maux;
+		message_t maux;
 		MPI_Status status;
 		MPI_Recv(&maux, 1, mpi_message_type, MPI_ANY_SOURCE, 
 				 MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		maux.source = status.MPI_SOURCE;
 		if(!maux.marker){
-			if(SNAPSHOT_STARTED 
-					&& WHO_STARTED_SNAPSHOT == my_rank){ 
+			if(snapshot_started 
+					&& who_started_snapshot == my_rank){ 
 				/* verdadeiro somente para o processo q iniciou
 				 * aqui monitoramos os canais de comunicação
 				 * e gravamos os relógios comunicados durante o
 				 * snapshot
 				 */
-				if(WHO_STARTED_SNAPSHOT == 0){
+				if(who_started_snapshot == 0){
 					if(maux.source == 1)
 						channel1 = queue_insert(maux, channel1);
 					else if(maux.source == 2)
 						channel2 = queue_insert(maux, channel2);
-				} else if(WHO_STARTED_SNAPSHOT == 1){
+				} else if(who_started_snapshot == 1){
 					if(maux.source == 0)
 						channel0 = queue_insert(maux, channel0);
 					else if(maux.source == 2)
 						channel2 = queue_insert(maux, channel2);
-				} else if(WHO_STARTED_SNAPSHOT == 2){
+				} else if(who_started_snapshot == 2){
 					if(maux.source == 0)
 						channel0 = queue_insert(maux, channel0);
 					else if(maux.source == 1)
 						channel1 = queue_insert(maux, channel1);
 				}
 			}
-			if(MARKERS_SEEN == 1 && WHO_STARTED_SNAPSHOT != my_rank){
+			if(markers_seen == 1 && who_started_snapshot != my_rank){
 				/* Caso em que o processo executor não iniciou o snapshot
 				 * e viu um marker pela primeira vez. Também
 				 * deve monitorar os canais de entrada. */
@@ -399,7 +399,7 @@ void *get_message(void* args){
 					else if(maux.source == 1)
 						channel1 = queue_insert(maux, channel1);
 				}
-			} else if(MARKERS_SEEN > 1 && WHO_STARTED_SNAPSHOT != my_rank){
+			} else if(markers_seen > 1 && who_started_snapshot != my_rank){
 				// ???
 			}
 			sem_wait(&semaphore_clock);
@@ -409,11 +409,11 @@ void *get_message(void* args){
 		} else {
 			/* esperar o processo principal processar os relogios
 			 * que chegaram antes do marcador. */
-			MARKERS_SEEN++;
+			markers_seen++;
 OUT_OF_HERE:
 			sem_wait(&semaphore_clock);
 			if(clocks_to_be_processed == 0){
-				if(MARKERS_SEEN == 1){
+				if(markers_seen == 1){
 					/* se for o primeiro marcador visto pelo processo,
 					 * fazer snapshot do relógio e enviar marcadores para
 					 * os outros processos */
@@ -422,14 +422,14 @@ OUT_OF_HERE:
 					_clock_snapshot = _clock;
 					for(int i=0;i<3;i++){
 						if(i != my_rank){
-							MESSAGE m;
+							message_t m;
 							m.source = my_rank;
 							m.dest = i;
 							m.marker = 1;
 							produce_output(m);
 						}
 					}
-				} else if (MARKERS_SEEN > 1){
+				} else if (markers_seen > 1){
 					// ??????
 				}
 			} else {
@@ -447,7 +447,7 @@ void *post_message(void* args){
 	long n_sends = (long) args;
 
 	while(n_sends--){
-		MESSAGE mess = consume_output();
+		message_t mess = consume_output();
 		printf("Sending a message in process %d to %d\n", my_rank, mess.dest);
 		MPI_Send(&mess, 1, mpi_message_type, mess.dest, 0, MPI_COMM_WORLD);
 		printf("Message sent by %d to %d\n", my_rank, mess.dest);
@@ -460,7 +460,7 @@ void *process0(){
 	printf("Process: %d, Clock: (%d, %d, %d)\n", 0, _clock.p[0], _clock.p[1], _clock.p[2]);
 	Event(0); //(2,0,0)
 	printf("Process: %d, Clock: (%d, %d, %d)\n", 0, _clock.p[0], _clock.p[1], _clock.p[2]);
-	MESSAGE m;
+	message_t m;
 	sem_wait(&semaphore_clock);
 	m.conteudo = _clock;
 	sem_post(&semaphore_clock);
@@ -468,7 +468,7 @@ void *process0(){
 	m.dest = 1;
 	m.marker = 0;
 	produce_output(m);
-	MESSAGE m2 = consume_input();
+	message_t m2 = consume_input();
 	update_clock(m2.conteudo);
 	Event(0); //(3,1,0)
 	printf("Process: %d, Clock: (%d, %d, %d)\n", 0, _clock.p[0], _clock.p[1], _clock.p[2]);
@@ -500,7 +500,7 @@ void *process0(){
 void *process1(){
 	Event(1);
     printf("Process: %d, Clock: (%d, %d, %d)\n", 1, _clock.p[0], _clock.p[1], _clock.p[2]);
-	MESSAGE m;
+	message_t m;
 	sem_wait(&semaphore_clock);
 	m.conteudo = _clock;
 	sem_post(&semaphore_clock);
@@ -508,7 +508,7 @@ void *process1(){
 	m.dest = 0;
 	m.marker = 0;
 	produce_output(m);
-	MESSAGE m2 = consume_input();
+	message_t m2 = consume_input();
 	update_clock(m2.conteudo);
 	Event(1);
     printf("Process: %d, Clock: (%d, %d, %d)\n", 1, _clock.p[0], _clock.p[1], _clock.p[2]);
@@ -523,7 +523,7 @@ void *process2(){
     printf("Process: %d, Clock: (%d, %d, %d)\n", 2, _clock.p[0], _clock.p[1], _clock.p[2]);
     Event(2);
     printf("Process: %d, Clock: (%d, %d, %d)\n", 2, _clock.p[0], _clock.p[1], _clock.p[2]);
-	MESSAGE m;
+	message_t m;
 	sem_wait(&semaphore_clock);
 	m.conteudo = _clock;
 	sem_post(&semaphore_clock);
@@ -531,13 +531,13 @@ void *process2(){
 	m.dest = 0;
 	m.marker = 0;
 	produce_output(m);
-	MESSAGE m2 = consume_input();
+	message_t m2 = consume_input();
 	update_clock(m2.conteudo);
 	Event(2);
     printf("Process: %d, Clock: (%d, %d, %d)\n", 2, _clock.p[0], _clock.p[1], _clock.p[2]);
 }
 
-void update_clock(CLOCK c2){
+void update_clock(cclock_t c2){
 	sem_wait(&semaphore_clock);
 	clocks_to_be_processed--;
 	for(int i=0;i<3;i++)
@@ -554,15 +554,15 @@ void Event(int pid){
 
 void snapshot(int from){
 	sem_wait(&semaphore_clock);
-	SNAPSHOT_STARTED = 1;
-	MARKERS_SEEN++;
-	WHO_STARTED_SNAPSHOT = from;
+	snapshot_started = 1;
+	markers_seen++;
+	who_started_snapshot = from;
 	printf("Snapshot in process %d: Clock: (%d, %d, %d)\n", from, 
 			_clock.p[0], _clock.p[1], _clock.p[2]);
 	_clock_snapshot = _clock;
 	for(int i=0;i<3;i++){
 		if(i != from){
-			MESSAGE m;
+			message_t m;
 			m.marker = 1;
 			m.source = from;
 			m.dest = i;
